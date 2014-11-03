@@ -96,7 +96,7 @@ TEST(FetcherTest, DISABLED_BadURITest)
 {
   BasicFetcher f;
   EXPECT_TRUE(f.canhandleURI("http://www.example.com:8800/foo-bar"));
-  EXPECT_TRUE(f.canhandleURI("http://www.example.com/a/b/c/d/e/f/g/h/i.tar.gz"));
+  EXPECT_TRUE(f.canhandleURI("http://www.example.com/a/b/c/d//h/i.tar.gz"));
   EXPECT_TRUE(f.canhandleURI("http://www.test.com?pageid=123&testid=1524"));
   EXPECT_TRUE(f.canhandleURI("www.example1.com%%20and%%20http"));
   EXPECT_TRUE(f.canhandleURI("/www/example/org/Drst"));
@@ -138,27 +138,22 @@ TEST(FetcherTest, HDFSSuccessTest)
 
 TEST(FetcherTest, DISABLED_CurlFailTest_incompatibleURI)
 {
-
 }
 
 TEST(FetcherTest, DISABLED_CurlFailTest)
 {
-
 }
 
 TEST(FetcherTest, DISABLED_CurlSuccessTest)
 {
-
 }
 
 TEST(FetcherTest, DISABLED_LocalFailTest)
 {
-
 }
 
 TEST(FetcherTest, DISABLED_LocalSuccessTest)
 {
-
 }
 
 TEST_F(FetcherTest, FileURI)
