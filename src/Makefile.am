@@ -646,8 +646,11 @@ mesos_local_CPPFLAGS = $(MESOS_CPPFLAGS)
 mesos_local_LDADD = libmesos.la
 
 pkglibexec_PROGRAMS += mesos-fetcher
-mesos_fetcher_SOURCES =             \
-  launcher/fetcher.hpp              \
+mesos_fetcher_SOURCES =              \
+  launcher/fetcher/fetcher.hpp       \
+  launcher/fetcher/curl_fetcher.hpp  \
+  launcher/fetcher/local_fetcher.hpp \
+  launcher/fetcher/hdfs_fetcher.hpp  \
   launcher/fetcher.cpp
 mesos_fetcher_CPPFLAGS = $(MESOS_CPPFLAGS)
 mesos_fetcher_LDADD = libmesos.la
