@@ -17,22 +17,25 @@
  */
 
 #include <string>
+#include <vector>
 
 #include <mesos/mesos.hpp>
 
-#include <stout/net.hpp>
 #include <stout/option.hpp>
 #include <stout/os.hpp>
 #include <stout/strings.hpp>
 
-#include "hdfs/hdfs.hpp"
+#include "launcher/fetcher/fetcher.hpp"
+#include "launcher/fetcher/hdfs_fetcher.hpp"
+#include "launcher/fetcher/local_fetcher.hpp"
+#include "launcher/fetcher/curl_fetcher.hpp"
 
 using namespace mesos;
 
 using std::string;
+using std::vector;
 
-const char FILE_URI_PREFIX[] = "file://";
-const char FILE_URI_LOCALHOST[] = "file://localhost";
+
 
 // Try to extract filename into directory. If filename is recognized as an
 // archive it will be extracted and true returned; if not recognized then false
@@ -67,163 +70,40 @@ Try<bool> extract(const string& filename, const string& directory)
   return true;
 }
 
-// Attempt to get the uri using the hadoop client.
-Try<string> fetchWithHDFS(
-    const string& uri,
-    const string& directory)
-{
-  HDFS hdfs;
-  if(hdfs.available().isError()) {
-    LOG(INFO) << "Hadoop/HDFS not available, skipping fetch with HDFS";
-    return Error("HDFS unavailable");
-  }
-
-  LOG(INFO) << "Fetching URI '" << uri << "' using HDFS";
-
-  Try<string> base = os::basename(uri);
-  if (base.isError()) {
-    LOG(ERROR) << "Invalid basename for URI: " << base.error();
-    return Error("Invalid basename for URI");
-  }
-
-  string path = path::join(directory, base.get());
-
-  LOG(INFO) << "Downloading resource from '" << uri  << "' to '" << path << "'";
-
-  Try<Nothing> result = hdfs.copyToLocal(uri, path);
-  if(result.isError()) {
-    LOG(ERROR) << "HDFS copyToLocal failed: " << result.error();
-    return Error(result.error());
-  }
-
-  return path;
-}
-
-Try<string> fetchWithNet(
-    const string& uri,
-    const string& directory)
-{
-  LOG(INFO) << "Fetching URI '" << uri << "' with os::net";
-
-  string path = uri.substr(uri.find("://") + 3);
-  if (path.find("/") == string::npos ||
-      path.size() <= path.find("/") + 1) {
-    LOG(ERROR) << "Malformed URL (missing path)";
-    return Error("Malformed URI");
-  }
-
-  path =  path::join(directory, path.substr(path.find_last_of("/") + 1));
-  LOG(INFO) << "Downloading '" << uri << "' to '" << path << "'";
-  Try<int> code = net::download(uri, path);
-  if (code.isError()) {
-    LOG(ERROR) << "Error downloading resource: " << code.error().c_str();
-    return Error("Fetch of URI failed (" + code.error() + ")");
-  } else if (code.get() != 200) {
-    LOG(ERROR) << "Error downloading resource, received HTTP/FTP return code "
-    << code.get();
-    return Error("HTTP/FTP error (" + stringify(code.get()) + ")");
-  }
-
-  return path;
-}
-
-Try<string> fetchWithLocalCopy(
-    const string& uri,
-    const string& directory)
-{
-    string local = uri;
-    bool fileUri = false;
-    if (strings::startsWith(local, string(FILE_URI_LOCALHOST))) {
-        local = local.substr(sizeof(FILE_URI_LOCALHOST) - 1);
-        fileUri = true;
-    } else if (strings::startsWith(local, string(FILE_URI_PREFIX))) {
-        local = local.substr(sizeof(FILE_URI_PREFIX) - 1);
-        fileUri = true;
-    }
-
-    if(fileUri && !strings::startsWith(local, "/")) {
-        return Error("File URI only supports absolute paths");
-    }
-
-    if (local.find_first_of("/") != 0) {
-        // We got a non-Hadoop and non-absolute path.
-        if (os::hasenv("MESOS_FRAMEWORKS_HOME")) {
-            local = path::join(os::getenv("MESOS_FRAMEWORKS_HOME"), local);
-            LOG(INFO) << "Prepended environment variable "
-            << "MESOS_FRAMEWORKS_HOME to relative path, "
-            << "making it: '" << local << "'";
-        } else {
-            LOG(ERROR) << "A relative path was passed for the resource but the "
-            << "environment variable MESOS_FRAMEWORKS_HOME is not set. "
-            << "Please either specify this config option "
-            << "or avoid using a relative path";
-            return Error("Could not resolve relative URI");
-        }
-    }
-
-    Try<string> base = os::basename(local);
-    if (base.isError()) {
-        LOG(ERROR) << base.error();
-        return Error("Fetch of URI failed");
-    }
-
-    // Copy the resource to the directory.
-    string path = path::join(directory, base.get());
-    std::ostringstream command;
-    command << "cp '" << local << "' '" << path << "'";
-    LOG(INFO) << "Copying resource from '" << local
-    << "' to '" << directory << "'";
-
-    int status = os::system(command.str());
-    if (status != 0) {
-        LOG(ERROR) << "Failed to copy '" << local
-        << "' : Exit status " << status;
-        return Error("Local copy failed");
-    }
-
-    return path;
-}
-
 // Fetch URI into directory.
 Try<string> fetch(
+    const vector<Fetcher> fetchers,
     const string& uri,
     const string& directory)
 {
     LOG(INFO) << "Fetching URI '" << uri << "'";
-    // Some checks to make sure using the URI value in shell commands
-    // is safe. TODO(benh): These should be pushed into the scheduler
-    // driver and reported to the user.
-    if (uri.find_first_of('\\') != string::npos ||
-        uri.find_first_of('\'') != string::npos ||
-        uri.find_first_of('\0') != string::npos) {
-        LOG(ERROR) << "URI contains illegal characters, refusing to fetch";
-        return Error("Illegal characters in URI");
-    }
 
-    // 1. Try to fetch the uri using hdfs
-    Try<string> result = fetchWithHDFS(uri, directory);
-    if(result.isSome()){
+    // Try each fetcher
+    for (Fetcher &fetcher : fetchers) {
+      // check if fetcher can handle this uri
+      if(fetcher->canHandleURI(uri).isError()) {
+        continue;
+      }
+
+      // fetch using this handler
+      result = fetcher->fetch(uri, directory);
+      if(result.isSome()) {
         return result;
+      }
     }
 
-    // 2. Try to fetch uri using os::net / libcurl implementation
-    if (strings::startsWith(uri, "http://") ||
-        strings::startsWith(uri, "https://") ||
-        strings::startsWith(uri, "ftp://") ||
-        strings::startsWith(uri, "ftps://")) {
-        result = fetchWithNet(uri, directory);
-        if(result.isSome()){
-            return result;
-        }
-    }
-
-    // 3. Try to fetch using a local copy
-    return fetchWithLocalCopy(uri, directory);
+    return Error("Unable to find compatible fetcher for uri: " + uri);
 }
 
 int main(int argc, char* argv[])
 {
   GOOGLE_PROTOBUF_VERIFY_VERSION;
+
+  // create a vector of fetchers that will be used
+  const vector<Fetcher> fetchers({
+    HadoopFetcher(),
+    CurlFetcher(),
+    LocalFetcher()});
 
   CommandInfo commandInfo;
   // Construct URIs from the encoded environment string.
@@ -260,7 +140,7 @@ int main(int argc, char* argv[])
   // Fetch each URI to a local file, chmod, then chown if a user is provided.
   foreach (const CommandInfo::URI& uri, commandInfo.uris()) {
     // Fetch the URI to a local file.
-    Try<string> fetched = fetch(uri.value(), directory);
+    Try<string> fetched = fetch(fetchers, uri.value(), directory);
     if (fetched.isError()) {
       EXIT(1) << "Failed to fetch: " << uri.value();
     }

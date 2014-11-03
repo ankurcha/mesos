@@ -36,6 +36,11 @@
 #include "tests/flags.hpp"
 #include "tests/utils.hpp"
 
+#include "launcher/fetcher/fetcher.hpp"
+#include "launcher/fetcher/curl_fetcher.hpp"
+#include "launcher/fetcher/local_fetcher.hpp"
+#include "launcher/fetcher/hdfs_fetcher.hpp"
+
 using namespace mesos;
 using namespace mesos::internal;
 using namespace mesos::internal::tests;
@@ -48,6 +53,113 @@ using std::map;
 
 class FetcherTest : public TemporaryDirectoryTest {};
 
+class TestableHadoopFetcher: public HadoopFetcher {
+public:
+  bool isAvailable;
+  bool isOk;
+
+  TestableHadoopFetcher(bool avail, book ok)
+  {
+    isAvailable = avail;
+    isOk = ok;
+  }
+
+  TestableHadoopFetcher() {
+    TestableHadoopFetcher(true, true);
+  }
+
+protected:
+  Try<bool> available() {
+    return isAvailable;
+  }
+
+  Try<Nothing> copyToLocal(
+        const std::string& from,
+        const std::string& to)
+  {
+    return isOk ? Nothing() : Error("copyToLocal Fail");
+  }
+}
+
+class BasicFetcher: public Fetcher
+{
+public:
+    Try<string> fetch(
+    const string& uri,
+    const string& directory)
+  {
+    return Error("this is a test");
+  }
+}
+
+TEST(FetcherTest, DISABLED_BadURITest)
+{
+  BasicFetcher f;
+  EXPECT_TRUE(f.canhandleURI("http://www.example.com:8800/foo-bar"));
+  EXPECT_TRUE(f.canhandleURI("http://www.example.com/a/b/c/d/e/f/g/h/i.tar.gz"));
+  EXPECT_TRUE(f.canhandleURI("http://www.test.com?pageid=123&testid=1524"));
+  EXPECT_TRUE(f.canhandleURI("www.example1.com%%20and%%20http"));
+  EXPECT_TRUE(f.canhandleURI("/www/example/org/Drst"));
+  EXPECT_TRUE(f.canhandleURI("ftp://عمان.icom.museum"));
+  EXPECT_TRUE(f.canhandleURI("s3://com.example.mesos/foo.zip"));
+  EXPECT_TRUE(f.canhandleURI("http://www.example.org/\0"));
+
+  EXPECT_FALSE(f.canhandleURI("http://www.example.org/\\foo/bar.gz"));
+  EXPECT_FALSE(f.canhandleURI("ftp://www.example.org/\'foo\'/bar"));
+  EXPECT_FALSE(f.canhandleURI("http://www.\0example.org/"));
+}
+
+TEST(FetcherTest, HDFSFailTest_HadoopUnavailable)
+{
+  TestableHadoopFetcher hf(false, true);
+  Try<string> result = hf.fetch(
+    "hdfs://namenode:8080/fromFile", os::getcwd());
+  EXPECT_TRUE(result.isError());
+  EXPECT_EQ("HDFS unavailable", result.error());
+}
+
+TEST(FetcherTest, HDFSFailTest_Hadoopavailable)
+{
+  TestableHadoopFetcher hf(true, false);
+  Try<string> result = hf.fetch(
+    "hdfs://namenode:8080/fromFile", os::getcwd());
+  EXPECT_TRUE(result.isError());
+  EXPECT_EQ("copyToLocal Fail", result.error());
+}
+
+TEST(FetcherTest, HDFSSuccessTest)
+{
+  TestableHadoopFetcher hf(true, true);
+  Try<string> result = hf.fetch(
+    "hdfs://namenode:8080/fromFile", os::getcwd());
+  EXPECT_SOME(result);
+  EXPECT_EQ(path::join(os::getcwd, "fromFile"), result.get());
+}
+
+TEST(FetcherTest, DISABLED_CurlFailTest_incompatibleURI)
+{
+
+}
+
+TEST(FetcherTest, DISABLED_CurlFailTest)
+{
+
+}
+
+TEST(FetcherTest, DISABLED_CurlSuccessTest)
+{
+
+}
+
+TEST(FetcherTest, DISABLED_LocalFailTest)
+{
+
+}
+
+TEST(FetcherTest, DISABLED_LocalSuccessTest)
+{
+
+}
 
 TEST_F(FetcherTest, FileURI)
 {
